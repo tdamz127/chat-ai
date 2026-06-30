@@ -28,6 +28,8 @@ if "selected_model" not in st.session_state:
     st.session_state.selected_model = None
 if "purpose" not in st.session_state:
     st.session_state.purpose = "General"
+if "model_search" not in st.session_state:
+    st.session_state.model_search = ""
 
 
 def get_available_models(api_key):
@@ -47,7 +49,7 @@ def get_available_models(api_key):
             # Filter and sort by pricing
             models = sorted(
                 models,
-                key=lambda x: x.get("pricing", {}).get("prompt", float("inf"))
+                key=lambda x: float(x.get("pricing", {}).get("prompt", 999999))
             )
             return models
     except Exception as e:
@@ -75,11 +77,23 @@ def filter_models_by_purpose(models, purpose):
     return models
 
 
-def get_cheapest_model(models):
-    """Get cheapest model from list"""
-    if not models:
-        return None
-    return min(models, key=lambda x: float(x.get("pricing", {}).get("prompt", 999)))
+def search_models(models, query):
+    """Search models by name"""
+    if not query:
+        return models
+    query_lower = query.lower()
+    return [m for m in models if query_lower in m.get("id", "").lower()]
+
+
+def get_model_price(model):
+    """Safely get model price"""
+    try:
+        price = model.get("pricing", {}).get("prompt", None)
+        if price is not None:
+            return float(price)
+    except:
+        pass
+    return None
 
 
 def save_session(session_name, messages, model):
@@ -222,49 +236,59 @@ with st.sidebar:
             # Filter models by purpose
             filtered_models = filter_models_by_purpose(st.session_state.models, st.session_state.purpose)
             
-            # Display models as a table
-            st.write(f"📊 **Available Models for {st.session_state.purpose}** ({len(filtered_models)} found)")
+            # Search box
+            st.session_state.model_search = st.text_input(
+                "🔍 Search models:",
+                value=st.session_state.model_search,
+                placeholder="Type model name...",
+                key="model_search_box"
+            )
             
-            # Create table data
-            table_data = []
-            for idx, model in enumerate(filtered_models[:15]):  # Show top 15
-                price = float(model.get("pricing", {}).get("prompt", 0))
-                table_data.append({
-                    "Model": model["id"],
-                    "Price ($)": f"{price:.6f}",
-                    "Select": idx
-                })
+            # Search models
+            searched_models = search_models(filtered_models, st.session_state.model_search)
             
-            if table_data:
-                # Display models
-                for idx, row in enumerate(table_data):
+            # Display count
+            st.write(f"📊 **Available Models for {st.session_state.purpose}** ({len(searched_models)} found)")
+            
+            if searched_models:
+                # Create a scrollable container for models
+                st.markdown("---")
+                
+                for idx, model in enumerate(searched_models):
+                    price = get_model_price(model)
+                    
                     col1, col2, col3 = st.columns([2, 1, 1])
                     
                     with col1:
-                        st.code(row["Model"], language=None)
+                        st.code(model["id"], language=None)
                     
                     with col2:
-                        st.write(f"**{row['Price ($)']}/1k**")
+                        if price is not None:
+                            st.write(f"**${price:.6f}/1k**")
+                        else:
+                            st.write("**Free**")
                     
                     with col3:
-                        if st.button("✅ Select", key=f"select_{idx}"):
-                            st.session_state.selected_model = filtered_models[idx]["id"]
-                            st.success(f"✅ Selected: {filtered_models[idx]['id']}")
+                        if st.button("✅ Select", key=f"select_{idx}_{model['id']}"):
+                            st.session_state.selected_model = model["id"]
+                            st.success(f"✅ Selected: {model['id']}")
                             st.rerun()
                 
                 # Show currently selected model
                 if st.session_state.selected_model:
-                    st.divider()
+                    st.markdown("---")
                     selected = next((m for m in filtered_models if m["id"] == st.session_state.selected_model), None)
                     if selected:
+                        price = get_model_price(selected)
                         st.success(f"✅ Currently Selected: **{selected['id']}**")
-                        st.info(f"📊 Price: ${float(selected.get('pricing', {}).get('prompt', 0)):.6f} / ${float(selected.get('pricing', {}).get('completion', 0)):.6f}")
+                        if price is not None:
+                            st.info(f"📊 Price: ${price:.6f}/1k tokens")
+                        else:
+                            st.info(f"📊 Price: Free")
                     else:
                         st.warning("Selected model not in current filter. Please select again.")
-                else:
-                    st.info("👆 Click 'Select' to choose a model")
             else:
-                st.warning("No models available for this purpose")
+                st.warning("No models found for this search")
         else:
             st.error("Could not load models. Check your API key.")
     
