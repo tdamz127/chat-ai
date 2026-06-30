@@ -35,7 +35,8 @@ def load_preferences():
             "General": None,
             "Academic/Research": None,
             "Programming": None
-        }
+        },
+        "current_session_id": None
     }
 
 def save_preferences(prefs):
@@ -46,6 +47,119 @@ def save_preferences(prefs):
     except:
         pass
 
+def generate_session_id():
+    """Generate a unique session ID"""
+    return f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+def get_session_file(session_id):
+    """Get session file path"""
+    return SESSIONS_DIR / f"{session_id}.json"
+
+def load_current_session(session_id):
+    """Load current session data"""
+    if not session_id:
+        return None
+    
+    filepath = get_session_file(session_id)
+    if filepath.exists():
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            pass
+    return None
+
+def save_current_session(session_id, session_data):
+    """Save current session data (auto-save)"""
+    if not session_id:
+        return False
+    
+    try:
+        filepath = get_session_file(session_id)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(session_data, f, ensure_ascii=False, indent=2)
+        return True
+    except:
+        return False
+
+def save_session(session_name, messages, model):
+    """Save chat session to JSON file"""
+    session_data = {
+        "name": session_name,
+        "created_at": datetime.now().isoformat(),
+        "model": model,
+        "messages": messages
+    }
+    
+    # Create filename from session name
+    filename = f"{session_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    filepath = SESSIONS_DIR / filename
+    
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(session_data, f, ensure_ascii=False, indent=2)
+    
+    return str(filepath)
+
+def load_session(filepath):
+    """Load chat session from JSON file"""
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        st.error(f"Error loading session: {str(e)}")
+    return None
+
+def get_all_sessions():
+    """Get list of all saved sessions"""
+    sessions = []
+    for filepath in sorted(SESSIONS_DIR.glob("*.json"), reverse=True):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # Skip auto-save format files (session_*.json) and only show named sessions
+                if not filepath.name.startswith("session_"):
+                    sessions.append({
+                        "path": str(filepath),
+                        "name": data.get("name", "Unnamed"),
+                        "created_at": data.get("created_at", ""),
+                        "model": data.get("model", "Unknown"),
+                        "message_count": len(data.get("messages", []))
+                    })
+        except:
+            continue
+    return sessions
+
+def delete_session(filepath):
+    """Delete session file"""
+    try:
+        Path(filepath).unlink()
+        return True
+    except:
+        return False
+
+def search_sessions(query):
+    """Search through sessions"""
+    all_sessions = get_all_sessions()
+    results = []
+    
+    query_lower = query.lower()
+    for session in all_sessions:
+        if query_lower in session["name"].lower():
+            results.append(session)
+        else:
+            # Search in messages
+            try:
+                data = load_session(session["path"])
+                if data:
+                    for msg in data.get("messages", []):
+                        if query_lower in msg.get("content", "").lower():
+                            results.append(session)
+                            break
+            except:
+                continue
+    
+    return results
+
 # Load preferences at startup
 persisted_prefs = load_preferences()
 
@@ -54,10 +168,18 @@ if "api_key_openrouter" not in st.session_state:
     st.session_state.api_key_openrouter = persisted_prefs.get("api_key_openrouter", "")
 if "api_key_deepseek" not in st.session_state:
     st.session_state.api_key_deepseek = persisted_prefs.get("api_key_deepseek", "")
-if "current_session" not in st.session_state:
-    st.session_state.current_session = None
+if "current_session_id" not in st.session_state:
+    st.session_state.current_session_id = persisted_prefs.get("current_session_id")
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    # Load messages from current session if exists
+    if st.session_state.current_session_id:
+        session_data = load_current_session(st.session_state.current_session_id)
+        if session_data:
+            st.session_state.messages = session_data.get("messages", [])
+        else:
+            st.session_state.messages = []
+    else:
+        st.session_state.messages = []
 if "models_openrouter" not in st.session_state:
     st.session_state.models_openrouter = []
 if "models_deepseek" not in st.session_state:
@@ -74,7 +196,15 @@ if "model_search" not in st.session_state:
     st.session_state.model_search = ""
 if "show_model_modal" not in st.session_state:
     st.session_state.show_model_modal = False
-
+if "current_session_name" not in st.session_state:
+    if st.session_state.current_session_id:
+        session_data = load_current_session(st.session_state.current_session_id)
+        if session_data:
+            st.session_state.current_session_name = session_data.get("name", "Unnamed")
+        else:
+            st.session_state.current_session_name = None
+    else:
+        st.session_state.current_session_name = None
 
 def get_available_models_openrouter(api_key):
     """Fetch available models from OpenRouter"""
@@ -102,7 +232,6 @@ def get_available_models_openrouter(api_key):
         st.error(f"Error fetching OpenRouter models: {str(e)}")
     return []
 
-
 def get_available_models_deepseek(api_key):
     """Fetch available models from DeepSeek"""
     try:
@@ -128,7 +257,6 @@ def get_available_models_deepseek(api_key):
         st.warning(f"Error fetching DeepSeek models: {str(e)}")
     return []
 
-
 def filter_models_by_purpose(models, purpose):
     """Filter models based on purpose"""
     if purpose == "General":
@@ -148,14 +276,12 @@ def filter_models_by_purpose(models, purpose):
     
     return models
 
-
 def search_models(models, query):
     """Search models by name"""
     if not query:
         return models
     query_lower = query.lower()
     return [m for m in models if query_lower in m.get("id", "").lower()]
-
 
 def format_price(price):
     """Format price with full decimal notation"""
@@ -182,7 +308,6 @@ def format_price(price):
         except:
             return f"${price:.15f}".rstrip('0').rstrip('.')
 
-
 def get_model_price(model):
     """Safely get model price"""
     try:
@@ -192,88 +317,6 @@ def get_model_price(model):
     except:
         pass
     return None
-
-
-def save_session(session_name, messages, model):
-    """Save chat session to JSON file"""
-    session_data = {
-        "name": session_name,
-        "created_at": datetime.now().isoformat(),
-        "model": model,
-        "messages": messages
-    }
-    
-    # Create filename from session name
-    filename = f"{session_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    filepath = SESSIONS_DIR / filename
-    
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(session_data, f, ensure_ascii=False, indent=2)
-    
-    return str(filepath)
-
-
-def load_session(filepath):
-    """Load chat session from JSON file"""
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        st.error(f"Error loading session: {str(e)}")
-    return None
-
-
-def get_all_sessions():
-    """Get list of all saved sessions"""
-    sessions = []
-    for filepath in sorted(SESSIONS_DIR.glob("*.json"), reverse=True):
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                sessions.append({
-                    "path": str(filepath),
-                    "name": data.get("name", "Unnamed"),
-                    "created_at": data.get("created_at", ""),
-                    "model": data.get("model", "Unknown"),
-                    "message_count": len(data.get("messages", []))
-                })
-        except:
-            continue
-    return sessions
-
-
-def delete_session(filepath):
-    """Delete session file"""
-    try:
-        Path(filepath).unlink()
-        return True
-    except:
-        return False
-
-
-def search_sessions(query):
-    """Search through sessions"""
-    all_sessions = get_all_sessions()
-    results = []
-    
-    query_lower = query.lower()
-    for session in all_sessions:
-        if query_lower in session["name"].lower():
-            results.append(session)
-        else:
-            # Search in messages
-            try:
-                data = load_session(session["path"])
-                if data:
-                    for msg in data.get("messages", []):
-                        if query_lower in msg.get("content", "").lower():
-                            results.append(session)
-                            break
-            except:
-                continue
-    
-    return results
-
 
 def chat_with_ai(api_key, model_id, messages, provider):
     """Send message to AI API"""
@@ -309,17 +352,27 @@ def chat_with_ai(api_key, model_id, messages, provider):
     except Exception as e:
         return f"Error: {str(e)}"
 
-
 def save_all_preferences():
     """Save all preferences to file"""
     prefs = {
         "api_key_openrouter": st.session_state.api_key_openrouter,
         "api_key_deepseek": st.session_state.api_key_deepseek,
         "purpose": st.session_state.purpose,
-        "selected_models": st.session_state.selected_models
+        "selected_models": st.session_state.selected_models,
+        "current_session_id": st.session_state.current_session_id
     }
     save_preferences(prefs)
 
+def auto_save_session():
+    """Auto-save current session"""
+    if st.session_state.current_session_id:
+        session_data = {
+            "name": st.session_state.current_session_name,
+            "created_at": datetime.now().isoformat(),
+            "model": st.session_state.selected_models.get(st.session_state.purpose),
+            "messages": st.session_state.messages
+        }
+        save_current_session(st.session_state.current_session_id, session_data)
 
 # Sidebar
 with st.sidebar:
@@ -416,13 +469,12 @@ with st.sidebar:
     # New session
     new_session_name = st.text_input("New session name:", placeholder="e.g., My Project")
     if st.button("Create New Session") and new_session_name:
-        current_selected = st.session_state.selected_models.get(st.session_state.purpose)
-        st.session_state.current_session = {
-            "name": new_session_name,
-            "messages": [],
-            "model": current_selected
-        }
+        session_id = generate_session_id()
+        st.session_state.current_session_id = session_id
+        st.session_state.current_session_name = new_session_name
         st.session_state.messages = []
+        auto_save_session()
+        save_all_preferences()
         st.success(f"Created: {new_session_name}")
         st.rerun()
     
@@ -440,8 +492,9 @@ with st.sidebar:
                 if st.button(f"📝 {result['name']} ({result['message_count']} msgs)"):
                     data = load_session(result["path"])
                     if data:
-                        st.session_state.current_session = data
+                        st.session_state.current_session_name = data.get("name", "Unnamed")
                         st.session_state.messages = data.get("messages", [])
+                        st.session_state.current_session_id = None  # Archived session
                         st.rerun()
             with col2:
                 if st.button("🗑️", key=f"del_{result['path']}"):
@@ -459,8 +512,9 @@ with st.sidebar:
                     if st.button(f"📝 {session['name']} ({session['message_count']} msgs)", key=f"load_{session['path']}"):
                         data = load_session(session["path"])
                         if data:
-                            st.session_state.current_session = data
+                            st.session_state.current_session_name = data.get("name", "Unnamed")
                             st.session_state.messages = data.get("messages", [])
+                            st.session_state.current_session_id = None  # Archived session
                             st.rerun()
                 with col2:
                     if st.button("🗑️", key=f"del_{session['path']}"):
@@ -538,6 +592,7 @@ if st.session_state.show_model_modal:
                     st.session_state.selected_models[st.session_state.purpose] = f"{provider}:{model['id']}"
                     save_all_preferences()
                     st.session_state.show_model_modal = False
+                    auto_save_session()
                     st.success(f"✅ Selected: {model['id']}")
                     st.rerun()
     else:
@@ -548,14 +603,14 @@ if st.session_state.show_model_modal:
 if not st.session_state.show_model_modal:
     st.title("💬 Chat AI")
     
-    if st.session_state.current_session:
+    if st.session_state.current_session_name:
         col1, col2 = st.columns([4, 1])
         with col1:
-            st.subheader(f"📌 {st.session_state.current_session['name']}")
+            st.subheader(f"📌 {st.session_state.current_session_name}")
         with col2:
-            if st.button("📥 Save Session"):
+            if st.button("📥 Save as New"):
                 save_session(
-                    st.session_state.current_session["name"],
+                    st.session_state.current_session_name,
                     st.session_state.messages,
                     st.session_state.selected_models.get(st.session_state.purpose)
                 )
@@ -591,6 +646,9 @@ if not st.session_state.show_model_modal:
                     with st.chat_message("user"):
                         st.write(user_input)
                     
+                    # Auto-save after user message
+                    auto_save_session()
+                    
                     # Get AI response
                     with st.chat_message("assistant"):
                         with st.spinner("Thinking..."):
@@ -603,6 +661,8 @@ if not st.session_state.show_model_modal:
                             st.write(response)
                             st.session_state.messages.append({"role": "assistant", "content": response})
                     
+                    # Auto-save after assistant response
+                    auto_save_session()
                     st.rerun()
             else:
                 st.warning(f"Please add API key for {provider}")
