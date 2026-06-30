@@ -15,19 +15,55 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1"
 # Page config
 st.set_page_config(page_title="Chat AI", layout="wide", initial_sidebar_state="expanded")
 
-# Initialize session state
+# Load persisted data from file
+PERSIST_FILE = Path("user_preferences.json")
+
+def load_preferences():
+    """Load user preferences from file"""
+    if PERSIST_FILE.exists():
+        try:
+            with open(PERSIST_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            pass
+    return {
+        "api_key": "",
+        "purpose": "General",
+        "selected_models": {
+            "General": None,
+            "Academic/Research": None,
+            "Programming": None
+        }
+    }
+
+def save_preferences(prefs):
+    """Save user preferences to file"""
+    try:
+        with open(PERSIST_FILE, "w", encoding="utf-8") as f:
+            json.dump(prefs, f, ensure_ascii=False, indent=2)
+    except:
+        pass
+
+# Load preferences at startup
+persisted_prefs = load_preferences()
+
+# Initialize session state with persisted values
 if "api_key" not in st.session_state:
-    st.session_state.api_key = ""
+    st.session_state.api_key = persisted_prefs.get("api_key", "")
 if "current_session" not in st.session_state:
     st.session_state.current_session = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "models" not in st.session_state:
     st.session_state.models = []
-if "selected_model" not in st.session_state:
-    st.session_state.selected_model = None
+if "selected_models" not in st.session_state:
+    st.session_state.selected_models = persisted_prefs.get("selected_models", {
+        "General": None,
+        "Academic/Research": None,
+        "Programming": None
+    })
 if "purpose" not in st.session_state:
-    st.session_state.purpose = "General"
+    st.session_state.purpose = persisted_prefs.get("purpose", "General")
 if "model_search" not in st.session_state:
     st.session_state.model_search = ""
 if "show_model_modal" not in st.session_state:
@@ -232,17 +268,31 @@ def chat_with_ai(api_key, model, messages):
         return f"Error: {str(e)}"
 
 
+def save_all_preferences():
+    """Save all preferences to file"""
+    prefs = {
+        "api_key": st.session_state.api_key,
+        "purpose": st.session_state.purpose,
+        "selected_models": st.session_state.selected_models
+    }
+    save_preferences(prefs)
+
+
 # Sidebar
 with st.sidebar:
     st.title("⚙️ Settings")
     
     # API Key
-    st.session_state.api_key = st.text_input(
+    api_key_input = st.text_input(
         "OpenRouter API Key",
         value=st.session_state.api_key,
         type="password",
         help="Get from https://openrouter.ai"
     )
+    
+    if api_key_input != st.session_state.api_key:
+        st.session_state.api_key = api_key_input
+        save_all_preferences()
     
     if st.session_state.api_key:
         # Load models
@@ -254,12 +304,16 @@ with st.sidebar:
             st.subheader("🤖 Model Selection")
             
             # Purpose selector
+            old_purpose = st.session_state.purpose
             st.session_state.purpose = st.selectbox(
                 "Select Purpose:",
                 options=["General", "Academic/Research", "Programming"],
                 index=["General", "Academic/Research", "Programming"].index(st.session_state.purpose) if st.session_state.purpose in ["General", "Academic/Research", "Programming"] else 0,
                 key="purpose_selector"
             )
+            
+            if old_purpose != st.session_state.purpose:
+                save_all_preferences()
             
             # Filter models by purpose
             filtered_models = filter_models_by_purpose(st.session_state.models, st.session_state.purpose)
@@ -268,10 +322,11 @@ with st.sidebar:
             if st.button("📋 Browse Models", key="open_modal_button", use_container_width=True):
                 st.session_state.show_model_modal = True
             
-            # Show currently selected model
-            if st.session_state.selected_model:
+            # Show currently selected model for this purpose
+            current_selected = st.session_state.selected_models.get(st.session_state.purpose)
+            if current_selected:
                 st.markdown("---")
-                selected = next((m for m in st.session_state.models if m["id"] == st.session_state.selected_model), None)
+                selected = next((m for m in st.session_state.models if m["id"] == current_selected), None)
                 if selected:
                     price = get_model_price(selected)
                     price_str = format_price(price)
@@ -289,10 +344,11 @@ with st.sidebar:
     # New session
     new_session_name = st.text_input("New session name:", placeholder="e.g., My Project")
     if st.button("Create New Session") and new_session_name:
+        current_selected = st.session_state.selected_models.get(st.session_state.purpose)
         st.session_state.current_session = {
             "name": new_session_name,
             "messages": [],
-            "model": st.session_state.selected_model
+            "model": current_selected
         }
         st.session_state.messages = []
         st.success(f"Created: {new_session_name}")
@@ -363,6 +419,7 @@ if st.session_state.show_model_modal:
     
     if modal_purpose != st.session_state.purpose:
         st.session_state.purpose = modal_purpose
+        save_all_preferences()
     
     # Filter models by purpose
     filtered_models = filter_models_by_purpose(st.session_state.models, st.session_state.purpose)
@@ -405,7 +462,8 @@ if st.session_state.show_model_modal:
             
             with col3:
                 if st.button("✅ Select", key=f"modal_select_{idx}_{searched_models[idx]['id']}"):
-                    st.session_state.selected_model = searched_models[idx]["id"]
+                    st.session_state.selected_models[st.session_state.purpose] = searched_models[idx]["id"]
+                    save_all_preferences()
                     st.session_state.show_model_modal = False
                     st.success(f"✅ Selected: {searched_models[idx]['id']}")
                     st.rerun()
@@ -426,7 +484,7 @@ if not st.session_state.show_model_modal:
                 save_session(
                     st.session_state.current_session["name"],
                     st.session_state.messages,
-                    st.session_state.selected_model
+                    st.session_state.selected_models.get(st.session_state.purpose)
                 )
                 st.success("Session saved!")
         
@@ -436,7 +494,8 @@ if not st.session_state.show_model_modal:
                 st.write(msg["content"])
         
         # Chat input
-        if st.session_state.api_key and st.session_state.selected_model:
+        current_selected = st.session_state.selected_models.get(st.session_state.purpose)
+        if st.session_state.api_key and current_selected:
             user_input = st.chat_input("Type your message...")
             if user_input:
                 # Add user message
@@ -450,7 +509,7 @@ if not st.session_state.show_model_modal:
                     with st.spinner("Thinking..."):
                         response = chat_with_ai(
                             st.session_state.api_key,
-                            st.session_state.selected_model,
+                            current_selected,
                             st.session_state.messages
                         )
                         st.write(response)
