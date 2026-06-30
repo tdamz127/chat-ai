@@ -85,6 +85,23 @@ def search_models(models, query):
     return [m for m in models if query_lower in m.get("id", "").lower()]
 
 
+def format_price(price):
+    """Format price with smart notation"""
+    if price is None:
+        return "Free"
+    
+    price = float(price)
+    
+    if price == 0:
+        return "Free"
+    elif price < 0.000001:
+        # Use scientific notation for very small prices
+        return f"${price:.2e}"
+    else:
+        # Format normally
+        return f"${price:.6f}"
+
+
 def get_model_price(model):
     """Safely get model price"""
     try:
@@ -256,6 +273,7 @@ with st.sidebar:
                 
                 for idx, model in enumerate(searched_models):
                     price = get_model_price(model)
+                    price_str = format_price(price)
                     
                     col1, col2, col3 = st.columns([2, 1, 1])
                     
@@ -263,10 +281,7 @@ with st.sidebar:
                         st.code(model["id"], language=None)
                     
                     with col2:
-                        if price is not None:
-                            st.write(f"**${price:.6f}/1k**")
-                        else:
-                            st.write("**Free**")
+                        st.write(f"**{price_str}/1k**")
                     
                     with col3:
                         if st.button("✅ Select", key=f"select_{idx}_{model['id']}"):
@@ -280,11 +295,9 @@ with st.sidebar:
                     selected = next((m for m in filtered_models if m["id"] == st.session_state.selected_model), None)
                     if selected:
                         price = get_model_price(selected)
+                        price_str = format_price(price)
                         st.success(f"✅ Currently Selected: **{selected['id']}**")
-                        if price is not None:
-                            st.info(f"📊 Price: ${price:.6f}/1k tokens")
-                        else:
-                            st.info(f"📊 Price: Free")
+                        st.info(f"📊 Price: {price_str}/1k tokens")
                     else:
                         st.warning("Selected model not in current filter. Please select again.")
             else:
