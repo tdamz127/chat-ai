@@ -4,6 +4,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
+import pandas as pd
 
 # Config
 SESSIONS_DIR = Path("sessions")
@@ -221,56 +222,49 @@ with st.sidebar:
             # Filter models by purpose
             filtered_models = filter_models_by_purpose(st.session_state.models, st.session_state.purpose)
             
-            # Auto-select cheapest based on purpose
-            if st.button("🎯 Auto-select Best for Purpose"):
-                cheapest = get_cheapest_model(filtered_models)
-                if cheapest:
-                    st.session_state.selected_model = cheapest["id"]
-                    st.success(f"✅ Selected: {cheapest['id']}")
-                else:
-                    st.error("No models found for this purpose")
+            # Display models as a table
+            st.write(f"📊 **Available Models for {st.session_state.purpose}** ({len(filtered_models)} found)")
             
-            # Manual selection
-            if st.session_state.selected_model:
-                model_options = {m["id"]: f"{m['id']} - ${float(m.get('pricing', {}).get('prompt', 0)):.6f}/1k tokens" 
-                               for m in filtered_models}
+            # Create table data
+            table_data = []
+            for idx, model in enumerate(filtered_models[:15]):  # Show top 15
+                price = float(model.get("pricing", {}).get("prompt", 0))
+                table_data.append({
+                    "Model": model["id"],
+                    "Price ($)": f"{price:.6f}",
+                    "Select": idx
+                })
+            
+            if table_data:
+                # Display models
+                for idx, row in enumerate(table_data):
+                    col1, col2, col3 = st.columns([2, 1, 1])
+                    
+                    with col1:
+                        st.code(row["Model"], language=None)
+                    
+                    with col2:
+                        st.write(f"**{row['Price ($)']}/1k**")
+                    
+                    with col3:
+                        if st.button("✅ Select", key=f"select_{idx}"):
+                            st.session_state.selected_model = filtered_models[idx]["id"]
+                            st.success(f"✅ Selected: {filtered_models[idx]['id']}")
+                            st.rerun()
                 
-                if model_options:
-                    # Find current index
-                    current_index = 0
-                    try:
-                        model_ids = list(model_options.keys())
-                        if st.session_state.selected_model in model_ids:
-                            current_index = model_ids.index(st.session_state.selected_model)
-                        else:
-                            # If selected model not in filtered list, pick first from filtered
-                            st.session_state.selected_model = model_ids[0] if model_ids else None
-                            current_index = 0
-                    except:
-                        current_index = 0
-                    
-                    selected_model = st.selectbox(
-                        "Choose model:",
-                        options=list(model_options.keys()),
-                        format_func=lambda x: model_options[x],
-                        index=current_index,
-                        key="model_selector"
-                    )
-                    
-                    # Update if changed
-                    if selected_model != st.session_state.selected_model:
-                        st.session_state.selected_model = selected_model
-                    
-                    # Show selected model info
+                # Show currently selected model
+                if st.session_state.selected_model:
+                    st.divider()
                     selected = next((m for m in filtered_models if m["id"] == st.session_state.selected_model), None)
                     if selected:
-                        st.info(f"📊 {selected['id']}\n\n"
-                               f"Provider: {selected.get('owned_by', 'N/A')}\n\n"
-                               f"Pricing: ${float(selected.get('pricing', {}).get('prompt', 0)):.6f} / ${float(selected.get('pricing', {}).get('completion', 0)):.6f}")
+                        st.success(f"✅ Currently Selected: **{selected['id']}**")
+                        st.info(f"📊 Price: ${float(selected.get('pricing', {}).get('prompt', 0)):.6f} / ${float(selected.get('pricing', {}).get('completion', 0)):.6f}")
+                    else:
+                        st.warning("Selected model not in current filter. Please select again.")
                 else:
-                    st.warning("No models available for this purpose")
+                    st.info("👆 Click 'Select' to choose a model")
             else:
-                st.info("👆 Click 'Auto-select Best for Purpose' to get started")
+                st.warning("No models available for this purpose")
         else:
             st.error("Could not load models. Check your API key.")
     
