@@ -30,6 +30,8 @@ if "purpose" not in st.session_state:
     st.session_state.purpose = "General"
 if "model_search" not in st.session_state:
     st.session_state.model_search = ""
+if "show_model_modal" not in st.session_state:
+    st.session_state.show_model_modal = False
 
 
 def get_available_models(api_key):
@@ -86,7 +88,7 @@ def search_models(models, query):
 
 
 def format_price(price):
-    """Format price with smart notation"""
+    """Format price with full decimal notation"""
     if price is None:
         return "Free"
     
@@ -94,12 +96,21 @@ def format_price(price):
     
     if price == 0:
         return "Free"
-    elif price < 0.000001:
-        # Use scientific notation for very small prices
-        return f"${price:.2e}"
     else:
-        # Format normally
-        return f"${price:.6f}"
+        # Use Decimal for precise formatting
+        from decimal import Decimal
+        try:
+            d = Decimal(str(price))
+            # Get the number of decimal places needed
+            if price >= 0.1:
+                return f"${price:.6f}"
+            elif price >= 0.0001:
+                return f"${price:.10f}"
+            else:
+                # For very small numbers, show up to 15 decimals
+                return f"${price:.15f}".rstrip('0').rstrip('.')
+        except:
+            return f"${price:.15f}".rstrip('0').rstrip('.')
 
 
 def get_model_price(model):
@@ -253,55 +264,20 @@ with st.sidebar:
             # Filter models by purpose
             filtered_models = filter_models_by_purpose(st.session_state.models, st.session_state.purpose)
             
-            # Search box
-            st.session_state.model_search = st.text_input(
-                "🔍 Search models:",
-                value=st.session_state.model_search,
-                placeholder="Type model name...",
-                key="model_search_box"
-            )
+            # Open modal button
+            if st.button("📋 Browse Models", key="open_modal_button", use_container_width=True):
+                st.session_state.show_model_modal = True
             
-            # Search models
-            searched_models = search_models(filtered_models, st.session_state.model_search)
-            
-            # Display count
-            st.write(f"📊 **Available Models for {st.session_state.purpose}** ({len(searched_models)} found)")
-            
-            if searched_models:
-                # Create a scrollable container for models
+            # Show currently selected model
+            if st.session_state.selected_model:
                 st.markdown("---")
-                
-                for idx, model in enumerate(searched_models):
-                    price = get_model_price(model)
+                selected = next((m for m in st.session_state.models if m["id"] == st.session_state.selected_model), None)
+                if selected:
+                    price = get_model_price(selected)
                     price_str = format_price(price)
-                    
-                    col1, col2, col3 = st.columns([2, 1, 1])
-                    
-                    with col1:
-                        st.code(model["id"], language=None)
-                    
-                    with col2:
-                        st.write(f"**{price_str}/1k**")
-                    
-                    with col3:
-                        if st.button("✅ Select", key=f"select_{idx}_{model['id']}"):
-                            st.session_state.selected_model = model["id"]
-                            st.success(f"✅ Selected: {model['id']}")
-                            st.rerun()
-                
-                # Show currently selected model
-                if st.session_state.selected_model:
-                    st.markdown("---")
-                    selected = next((m for m in filtered_models if m["id"] == st.session_state.selected_model), None)
-                    if selected:
-                        price = get_model_price(selected)
-                        price_str = format_price(price)
-                        st.success(f"✅ Currently Selected: **{selected['id']}**")
-                        st.info(f"📊 Price: {price_str}/1k tokens")
-                    else:
-                        st.warning("Selected model not in current filter. Please select again.")
-            else:
-                st.warning("No models found for this search")
+                    st.success(f"✅ Currently Selected:\n\n**{selected['id']}**\n\n{price_str}/1k tokens")
+                else:
+                    st.warning("Selected model not found.")
         else:
             st.error("Could not load models. Check your API key.")
     
@@ -367,50 +343,121 @@ with st.sidebar:
             st.info("No sessions yet. Create one!")
 
 
-# Main chat area
-st.title("💬 Chat AI")
-
-if st.session_state.current_session:
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        st.subheader(f"📌 {st.session_state.current_session['name']}")
-    with col2:
-        if st.button("📥 Save Session"):
-            save_session(
-                st.session_state.current_session["name"],
-                st.session_state.messages,
-                st.session_state.selected_model
-            )
-            st.success("Session saved!")
-    
-    # Display messages
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
-    
-    # Chat input
-    if st.session_state.api_key and st.session_state.selected_model:
-        user_input = st.chat_input("Type your message...")
-        if user_input:
-            # Add user message
-            st.session_state.messages.append({"role": "user", "content": user_input})
-            
-            with st.chat_message("user"):
-                st.write(user_input)
-            
-            # Get AI response
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    response = chat_with_ai(
-                        st.session_state.api_key,
-                        st.session_state.selected_model,
-                        st.session_state.messages
-                    )
-                    st.write(response)
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-            
+# Modal for model selection
+if st.session_state.show_model_modal:
+    col_close, col_title = st.columns([1, 5])
+    with col_close:
+        if st.button("✖️ Close", key="close_modal"):
+            st.session_state.show_model_modal = False
             st.rerun()
+    
+    st.title("🤖 Select Model")
+    
+    # Purpose selector in modal
+    modal_purpose = st.selectbox(
+        "Filter by Purpose:",
+        options=["General", "Academic/Research", "Programming"],
+        index=["General", "Academic/Research", "Programming"].index(st.session_state.purpose),
+        key="modal_purpose_selector"
+    )
+    
+    if modal_purpose != st.session_state.purpose:
+        st.session_state.purpose = modal_purpose
+    
+    # Filter models by purpose
+    filtered_models = filter_models_by_purpose(st.session_state.models, st.session_state.purpose)
+    
+    # Search box
+    modal_search = st.text_input(
+        "🔍 Search models:",
+        placeholder="Type model name...",
+        key="modal_search_box"
+    )
+    
+    # Search models
+    searched_models = search_models(filtered_models, modal_search)
+    
+    # Display count and table
+    st.write(f"📊 **Available Models** ({len(searched_models)} found)")
+    st.markdown("---")
+    
+    if searched_models:
+        # Create table data
+        table_data = []
+        for idx, model in enumerate(searched_models):
+            price = get_model_price(model)
+            price_str = format_price(price)
+            table_data.append({
+                "Model": model["id"],
+                "Price (/1k tokens)": price_str,
+                "Action": f"select_{idx}"
+            })
+        
+        # Display as table with columns
+        for idx, row in enumerate(table_data):
+            col1, col2, col3 = st.columns([2.5, 1.5, 1])
+            
+            with col1:
+                st.code(row["Model"], language=None)
+            
+            with col2:
+                st.write(row["Price (/1k tokens)"])
+            
+            with col3:
+                if st.button("✅ Select", key=f"modal_select_{idx}_{searched_models[idx]['id']}"):
+                    st.session_state.selected_model = searched_models[idx]["id"]
+                    st.session_state.show_model_modal = False
+                    st.success(f"✅ Selected: {searched_models[idx]['id']}")
+                    st.rerun()
     else:
-        st.warning("Please set API key and select a model first.")
-else:
-    st.info("Create a new session or load an existing one from the sidebar.")
+        st.warning("No models found for this search")
+
+
+# Main chat area
+if not st.session_state.show_model_modal:
+    st.title("💬 Chat AI")
+    
+    if st.session_state.current_session:
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.subheader(f"📌 {st.session_state.current_session['name']}")
+        with col2:
+            if st.button("📥 Save Session"):
+                save_session(
+                    st.session_state.current_session["name"],
+                    st.session_state.messages,
+                    st.session_state.selected_model
+                )
+                st.success("Session saved!")
+        
+        # Display messages
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+        
+        # Chat input
+        if st.session_state.api_key and st.session_state.selected_model:
+            user_input = st.chat_input("Type your message...")
+            if user_input:
+                # Add user message
+                st.session_state.messages.append({"role": "user", "content": user_input})
+                
+                with st.chat_message("user"):
+                    st.write(user_input)
+                
+                # Get AI response
+                with st.chat_message("assistant"):
+                    with st.spinner("Thinking..."):
+                        response = chat_with_ai(
+                            st.session_state.api_key,
+                            st.session_state.selected_model,
+                            st.session_state.messages
+                        )
+                        st.write(response)
+                        st.session_state.messages.append({"role": "assistant", "content": response})
+                
+                st.rerun()
+        else:
+            st.warning("Please set API key and select a model first.")
+    else:
+        st.info("Create a new session or load an existing one from the sidebar.")
