@@ -5,6 +5,9 @@ import os
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
+import base64
+from io import BytesIO
+from PIL import Image
 
 # Config
 SESSIONS_DIR = Path("sessions")
@@ -189,6 +192,27 @@ def search_sessions(query):
     
     return results
 
+def image_to_base64(image):
+    """Convert PIL Image to base64 string"""
+    try:
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        buffer.seek(0)
+        return base64.b64encode(buffer.getvalue()).decode()
+    except:
+        return None
+
+def get_image_media_type(image_format):
+    """Get media type from image format"""
+    format_map = {
+        "PNG": "image/png",
+        "JPEG": "image/jpeg",
+        "JPG": "image/jpeg",
+        "GIF": "image/gif",
+        "WEBP": "image/webp"
+    }
+    return format_map.get(image_format.upper(), "image/png")
+
 # Load preferences at startup
 persisted_prefs = load_preferences()
 
@@ -234,6 +258,8 @@ if "current_session_name" not in st.session_state:
             st.session_state.current_session_name = None
     else:
         st.session_state.current_session_name = None
+if "pasted_image" not in st.session_state:
+    st.session_state.pasted_image = None
 
 def get_available_models_openrouter(api_key):
     """Fetch available models from OpenRouter"""
@@ -405,6 +431,30 @@ def auto_save_session():
             "messages": st.session_state.messages
         }
         save_current_session(st.session_state.current_session_id, session_data)
+
+# Custom HTML for image paste functionality
+st.markdown("""
+<style>
+    .paste-image-container {
+        border: 2px dashed #ccc;
+        border-radius: 5px;
+        padding: 20px;
+        text-align: center;
+        cursor: pointer;
+        background-color: #f9f9f9;
+    }
+    
+    .paste-image-container:hover {
+        background-color: #f0f0f0;
+        border-color: #999;
+    }
+    
+    .paste-image-container.dragover {
+        background-color: #e0e0e0;
+        border-color: #333;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Sidebar
 with st.sidebar:
@@ -683,7 +733,17 @@ if not st.session_state.show_model_modal:
         # Display messages
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
-                st.write(msg["content"])
+                # Check if message has image
+                if isinstance(msg.get("content"), list):
+                    # Message with image
+                    for content_block in msg["content"]:
+                        if content_block.get("type") == "text":
+                            st.write(content_block.get("text", ""))
+                        elif content_block.get("type") == "image_url":
+                            st.image(content_block.get("image_url", {}).get("url", ""), use_column_width=True)
+                else:
+                    # Regular text message
+                    st.write(msg.get("content", ""))
         
         # Chat input
         current_selected = st.session_state.selected_models.get(st.session_state.purpose)
@@ -702,13 +762,79 @@ if not st.session_state.show_model_modal:
                 api_key = st.session_state.api_key_openrouter
             
             if api_key:
-                user_input = st.chat_input("Type your message...")
-                if user_input:
+                # Image paste area
+                st.markdown("---")
+                st.write("📎 **Paste image from clipboard** (Ctrl+V in the box below)")
+                
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    # File uploader as fallback
+                    uploaded_file = st.file_uploader(
+                        "Or select image file:",
+                        type=["png", "jpg", "jpeg", "gif", "webp"],
+                        key="image_uploader"
+                    )
+                    
+                    if uploaded_file is not None:
+                        image = Image.open(uploaded_file)
+                        st.session_state.pasted_image = image
+                        st.image(image, caption="Selected Image", use_column_width=True)
+                
+                with col2:
+                    if st.session_state.pasted_image is not None:
+                        if st.button("❌ Clear Image"):
+                            st.session_state.pasted_image = None
+                            st.rerun()
+                
+                st.markdown("---")
+                
+                # Chat input with image support
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    user_input = st.text_input("Type your message...")
+                with col2:
+                    send_button = st.button("Send", key="send_button")
+                
+                if send_button and user_input:
+                    # Prepare message content
+                    if st.session_state.pasted_image:
+                        # Convert image to base64
+                        image_base64 = image_to_base64(st.session_state.pasted_image)
+                        media_type = get_image_media_type(st.session_state.pasted_image.format or "PNG")
+                        
+                        message_content = [
+                            {
+                                "type": "text",
+                                "text": user_input
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{media_type};base64,{image_base64}"
+                                }
+                            }
+                        ]
+                    else:
+                        message_content = user_input
+                    
                     # Add user message
-                    st.session_state.messages.append({"role": "user", "content": user_input})
+                    st.session_state.messages.append({
+                        "role": "user",
+                        "content": message_content
+                    })
                     
                     with st.chat_message("user"):
-                        st.write(user_input)
+                        if isinstance(message_content, list):
+                            for content_block in message_content:
+                                if content_block.get("type") == "text":
+                                    st.write(content_block.get("text", ""))
+                                elif content_block.get("type") == "image_url":
+                                    st.image(content_block.get("image_url", {}).get("url", ""), use_column_width=True)
+                        else:
+                            st.write(message_content)
+                    
+                    # Clear pasted image
+                    st.session_state.pasted_image = None
                     
                     # Auto-save after user message
                     auto_save_session()
@@ -723,7 +849,10 @@ if not st.session_state.show_model_modal:
                                 provider
                             )
                             st.write(response)
-                            st.session_state.messages.append({"role": "assistant", "content": response})
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": response
+                            })
                     
                     # Auto-save after assistant response
                     auto_save_session()
