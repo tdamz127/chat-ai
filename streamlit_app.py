@@ -275,12 +275,15 @@ def get_available_models_deepseek(api_key):
         if response.status_code == 200:
             data = response.json()
             models = data.get("data", [])
-            # Add provider tag
+            # Add provider tag - keep actual pricing from API
             for model in models:
                 model["provider"] = "DeepSeek"
-                # DeepSeek models typically have pricing structure
-                if "pricing" not in model:
-                    model["pricing"] = {"prompt": 0, "completion": 0}
+                # Don't override pricing - use what API returns
+            # Sort by pricing if available
+            models = sorted(
+                models,
+                key=lambda x: float(x.get("pricing", {}).get("prompt", 999999)) if x.get("pricing", {}).get("prompt") else 999999
+            )
             return models
     except Exception as e:
         st.warning(f"Error fetching DeepSeek models: {str(e)}")
@@ -315,7 +318,7 @@ def search_models(models, query):
 def format_price(price):
     """Format price with full decimal notation"""
     if price is None:
-        return "Free"
+        return "N/A"
     
     price = float(price) if price else 0
     
@@ -430,6 +433,8 @@ with st.sidebar:
     
     if api_key_ds != st.session_state.api_key_deepseek:
         st.session_state.api_key_deepseek = api_key_ds
+        # Clear cached models when API key changes
+        st.session_state.models_deepseek = []
         save_all_preferences()
     
     if st.session_state.api_key_openrouter or st.session_state.api_key_deepseek:
