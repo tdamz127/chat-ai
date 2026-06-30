@@ -82,6 +82,35 @@ def save_current_session(session_id, session_data):
     except:
         return False
 
+def archive_current_session(session_id, session_name, messages, model):
+    """Archive current session to named file"""
+    if not session_id or not session_name or not messages:
+        return False
+    
+    try:
+        session_data = {
+            "name": session_name,
+            "created_at": datetime.now().isoformat(),
+            "model": model,
+            "messages": messages
+        }
+        
+        # Create filename from session name
+        filename = f"archive_{session_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filepath = SESSIONS_DIR / filename
+        
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(session_data, f, ensure_ascii=False, indent=2)
+        
+        # Delete the active session file
+        active_file = get_session_file(session_id)
+        if active_file.exists():
+            active_file.unlink()
+        
+        return True
+    except:
+        return False
+
 def save_session(session_name, messages, model):
     """Save chat session to JSON file"""
     session_data = {
@@ -92,7 +121,7 @@ def save_session(session_name, messages, model):
     }
     
     # Create filename from session name
-    filename = f"{session_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    filename = f"archive_{session_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     filepath = SESSIONS_DIR / filename
     
     with open(filepath, "w", encoding="utf-8") as f:
@@ -110,14 +139,14 @@ def load_session(filepath):
     return None
 
 def get_all_sessions():
-    """Get list of all saved sessions"""
+    """Get list of all saved sessions (archived only)"""
     sessions = []
     for filepath in sorted(SESSIONS_DIR.glob("*.json"), reverse=True):
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                # Skip auto-save format files (session_*.json) and only show named sessions
-                if not filepath.name.startswith("session_"):
+            # Only show archived sessions (start with archive_)
+            if filepath.name.startswith("archive_"):
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
                     sessions.append({
                         "path": str(filepath),
                         "name": data.get("name", "Unnamed"),
@@ -469,6 +498,16 @@ with st.sidebar:
     # New session
     new_session_name = st.text_input("New session name:", placeholder="e.g., My Project")
     if st.button("Create New Session") and new_session_name:
+        # Archive current session before creating new one
+        if st.session_state.current_session_id and st.session_state.current_session_name and st.session_state.messages:
+            archive_current_session(
+                st.session_state.current_session_id,
+                st.session_state.current_session_name,
+                st.session_state.messages,
+                st.session_state.selected_models.get(st.session_state.purpose)
+            )
+        
+        # Create new session
         session_id = generate_session_id()
         st.session_state.current_session_id = session_id
         st.session_state.current_session_name = new_session_name
@@ -490,11 +529,21 @@ with st.sidebar:
             col1, col2 = st.columns([3, 1])
             with col1:
                 if st.button(f"📝 {result['name']} ({result['message_count']} msgs)"):
+                    # Archive current session
+                    if st.session_state.current_session_id and st.session_state.current_session_name and st.session_state.messages:
+                        archive_current_session(
+                            st.session_state.current_session_id,
+                            st.session_state.current_session_name,
+                            st.session_state.messages,
+                            st.session_state.selected_models.get(st.session_state.purpose)
+                        )
+                    
                     data = load_session(result["path"])
                     if data:
                         st.session_state.current_session_name = data.get("name", "Unnamed")
                         st.session_state.messages = data.get("messages", [])
                         st.session_state.current_session_id = None  # Archived session
+                        st.session_state.show_model_modal = False
                         st.rerun()
             with col2:
                 if st.button("🗑️", key=f"del_{result['path']}"):
@@ -510,11 +559,21 @@ with st.sidebar:
                 col1, col2 = st.columns([3, 1])
                 with col1:
                     if st.button(f"📝 {session['name']} ({session['message_count']} msgs)", key=f"load_{session['path']}"):
+                        # Archive current session
+                        if st.session_state.current_session_id and st.session_state.current_session_name and st.session_state.messages:
+                            archive_current_session(
+                                st.session_state.current_session_id,
+                                st.session_state.current_session_name,
+                                st.session_state.messages,
+                                st.session_state.selected_models.get(st.session_state.purpose)
+                            )
+                        
                         data = load_session(session["path"])
                         if data:
                             st.session_state.current_session_name = data.get("name", "Unnamed")
                             st.session_state.messages = data.get("messages", [])
                             st.session_state.current_session_id = None  # Archived session
+                            st.session_state.show_model_modal = False
                             st.rerun()
                 with col2:
                     if st.button("🗑️", key=f"del_{session['path']}"):
@@ -608,13 +667,13 @@ if not st.session_state.show_model_modal:
         with col1:
             st.subheader(f"📌 {st.session_state.current_session_name}")
         with col2:
-            if st.button("📥 Save as New"):
+            if st.button("📥 Save as Archive"):
                 save_session(
                     st.session_state.current_session_name,
                     st.session_state.messages,
                     st.session_state.selected_models.get(st.session_state.purpose)
                 )
-                st.success("Session saved!")
+                st.success("Session saved to archive!")
         
         # Display messages
         for msg in st.session_state.messages:
