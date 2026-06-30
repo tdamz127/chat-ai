@@ -11,6 +11,7 @@ SESSIONS_DIR = Path("sessions")
 SESSIONS_DIR.mkdir(exist_ok=True)
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1"
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1"
 
 # Page config
 st.set_page_config(page_title="Chat AI", layout="wide", initial_sidebar_state="expanded")
@@ -27,7 +28,8 @@ def load_preferences():
         except:
             pass
     return {
-        "api_key": "",
+        "api_key_openrouter": "",
+        "api_key_deepseek": "",
         "purpose": "General",
         "selected_models": {
             "General": None,
@@ -48,14 +50,18 @@ def save_preferences(prefs):
 persisted_prefs = load_preferences()
 
 # Initialize session state with persisted values
-if "api_key" not in st.session_state:
-    st.session_state.api_key = persisted_prefs.get("api_key", "")
+if "api_key_openrouter" not in st.session_state:
+    st.session_state.api_key_openrouter = persisted_prefs.get("api_key_openrouter", "")
+if "api_key_deepseek" not in st.session_state:
+    st.session_state.api_key_deepseek = persisted_prefs.get("api_key_deepseek", "")
 if "current_session" not in st.session_state:
     st.session_state.current_session = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "models" not in st.session_state:
-    st.session_state.models = []
+if "models_openrouter" not in st.session_state:
+    st.session_state.models_openrouter = []
+if "models_deepseek" not in st.session_state:
+    st.session_state.models_deepseek = []
 if "selected_models" not in st.session_state:
     st.session_state.selected_models = persisted_prefs.get("selected_models", {
         "General": None,
@@ -70,7 +76,7 @@ if "show_model_modal" not in st.session_state:
     st.session_state.show_model_modal = False
 
 
-def get_available_models(api_key):
+def get_available_models_openrouter(api_key):
     """Fetch available models from OpenRouter"""
     try:
         headers = {
@@ -84,14 +90,42 @@ def get_available_models(api_key):
         if response.status_code == 200:
             data = response.json()
             models = data.get("data", [])
-            # Filter and sort by pricing
+            # Add provider tag and sort by pricing
+            for model in models:
+                model["provider"] = "OpenRouter"
             models = sorted(
                 models,
                 key=lambda x: float(x.get("pricing", {}).get("prompt", 999999))
             )
             return models
     except Exception as e:
-        st.error(f"Error fetching models: {str(e)}")
+        st.error(f"Error fetching OpenRouter models: {str(e)}")
+    return []
+
+
+def get_available_models_deepseek(api_key):
+    """Fetch available models from DeepSeek"""
+    try:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+        }
+        response = requests.get(
+            f"{DEEPSEEK_API_URL}/models",
+            headers=headers,
+            timeout=10
+        )
+        if response.status_code == 200:
+            data = response.json()
+            models = data.get("data", [])
+            # Add provider tag
+            for model in models:
+                model["provider"] = "DeepSeek"
+                # DeepSeek models typically have pricing structure
+                if "pricing" not in model:
+                    model["pricing"] = {"prompt": 0, "completion": 0}
+            return models
+    except Exception as e:
+        st.warning(f"Error fetching DeepSeek models: {str(e)}")
     return []
 
 
@@ -128,7 +162,7 @@ def format_price(price):
     if price is None:
         return "Free"
     
-    price = float(price)
+    price = float(price) if price else 0
     
     if price == 0:
         return "Free"
@@ -241,19 +275,27 @@ def search_sessions(query):
     return results
 
 
-def chat_with_ai(api_key, model, messages):
-    """Send message to OpenRouter API"""
+def chat_with_ai(api_key, model_id, messages, provider):
+    """Send message to AI API"""
     try:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        if provider == "DeepSeek":
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            url = f"{DEEPSEEK_API_URL}/chat/completions"
+        else:  # OpenRouter
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            url = f"{OPENROUTER_API_URL}/chat/completions"
         
         response = requests.post(
-            f"{OPENROUTER_API_URL}/chat/completions",
+            url,
             headers=headers,
             json={
-                "model": model,
+                "model": model_id,
                 "messages": messages,
             },
             timeout=60
@@ -271,7 +313,8 @@ def chat_with_ai(api_key, model, messages):
 def save_all_preferences():
     """Save all preferences to file"""
     prefs = {
-        "api_key": st.session_state.api_key,
+        "api_key_openrouter": st.session_state.api_key_openrouter,
+        "api_key_deepseek": st.session_state.api_key_deepseek,
         "purpose": st.session_state.purpose,
         "selected_models": st.session_state.selected_models
     }
@@ -282,25 +325,45 @@ def save_all_preferences():
 with st.sidebar:
     st.title("⚙️ Settings")
     
-    # API Key
-    api_key_input = st.text_input(
+    # API Keys
+    st.subheader("🔑 API Keys")
+    
+    api_key_or = st.text_input(
         "OpenRouter API Key",
-        value=st.session_state.api_key,
+        value=st.session_state.api_key_openrouter,
         type="password",
         help="Get from https://openrouter.ai"
     )
     
-    if api_key_input != st.session_state.api_key:
-        st.session_state.api_key = api_key_input
+    if api_key_or != st.session_state.api_key_openrouter:
+        st.session_state.api_key_openrouter = api_key_or
         save_all_preferences()
     
-    if st.session_state.api_key:
+    api_key_ds = st.text_input(
+        "DeepSeek API Key",
+        value=st.session_state.api_key_deepseek,
+        type="password",
+        help="Get from https://platform.deepseek.com"
+    )
+    
+    if api_key_ds != st.session_state.api_key_deepseek:
+        st.session_state.api_key_deepseek = api_key_ds
+        save_all_preferences()
+    
+    if st.session_state.api_key_openrouter or st.session_state.api_key_deepseek:
         # Load models
-        if not st.session_state.models:
-            with st.spinner("Loading models..."):
-                st.session_state.models = get_available_models(st.session_state.api_key)
+        if not st.session_state.models_openrouter and st.session_state.api_key_openrouter:
+            with st.spinner("Loading OpenRouter models..."):
+                st.session_state.models_openrouter = get_available_models_openrouter(st.session_state.api_key_openrouter)
         
-        if st.session_state.models:
+        if not st.session_state.models_deepseek and st.session_state.api_key_deepseek:
+            with st.spinner("Loading DeepSeek models..."):
+                st.session_state.models_deepseek = get_available_models_deepseek(st.session_state.api_key_deepseek)
+        
+        # Combine all models
+        all_models = st.session_state.models_openrouter + st.session_state.models_deepseek
+        
+        if all_models:
             st.subheader("🤖 Model Selection")
             
             # Purpose selector
@@ -316,7 +379,7 @@ with st.sidebar:
                 save_all_preferences()
             
             # Filter models by purpose
-            filtered_models = filter_models_by_purpose(st.session_state.models, st.session_state.purpose)
+            filtered_models = filter_models_by_purpose(all_models, st.session_state.purpose)
             
             # Open modal button
             if st.button("📋 Browse Models", key="open_modal_button", use_container_width=True):
@@ -326,15 +389,24 @@ with st.sidebar:
             current_selected = st.session_state.selected_models.get(st.session_state.purpose)
             if current_selected:
                 st.markdown("---")
-                selected = next((m for m in st.session_state.models if m["id"] == current_selected), None)
+                # Parse model info (format: "provider:model_id")
+                if isinstance(current_selected, str) and ":" in current_selected:
+                    provider, model_id = current_selected.split(":", 1)
+                    selected = next((m for m in all_models if m["id"] == model_id and m.get("provider") == provider), None)
+                else:
+                    selected = next((m for m in all_models if m["id"] == current_selected), None)
+                
                 if selected:
                     price = get_model_price(selected)
                     price_str = format_price(price)
-                    st.success(f"✅ Currently Selected:\n\n**{selected['id']}**\n\n{price_str}/1k tokens")
+                    provider_tag = f"🔷 {selected.get('provider', 'Unknown')}"
+                    st.success(f"✅ Currently Selected:\n\n**{selected['id']}**\n\n{provider_tag}\n\n{price_str}/1k tokens")
                 else:
                     st.warning("Selected model not found.")
         else:
-            st.error("Could not load models. Check your API key.")
+            st.error("Could not load models. Check your API keys.")
+    else:
+        st.warning("Please add at least one API key (OpenRouter or DeepSeek)")
     
     st.divider()
     
@@ -409,6 +481,9 @@ if st.session_state.show_model_modal:
     
     st.title("🤖 Select Model")
     
+    # Combine all models
+    all_models = st.session_state.models_openrouter + st.session_state.models_deepseek
+    
     # Purpose selector in modal
     modal_purpose = st.selectbox(
         "Filter by Purpose:",
@@ -422,7 +497,7 @@ if st.session_state.show_model_modal:
         save_all_preferences()
     
     # Filter models by purpose
-    filtered_models = filter_models_by_purpose(st.session_state.models, st.session_state.purpose)
+    filtered_models = filter_models_by_purpose(all_models, st.session_state.purpose)
     
     # Search box
     modal_search = st.text_input(
@@ -439,33 +514,31 @@ if st.session_state.show_model_modal:
     st.markdown("---")
     
     if searched_models:
-        # Create table data
-        table_data = []
+        # Display as table with columns
         for idx, model in enumerate(searched_models):
             price = get_model_price(model)
             price_str = format_price(price)
-            table_data.append({
-                "Model": model["id"],
-                "Price (/1k tokens)": price_str,
-                "Action": f"select_{idx}"
-            })
-        
-        # Display as table with columns
-        for idx, row in enumerate(table_data):
-            col1, col2, col3 = st.columns([2.5, 1.5, 1])
+            provider = model.get("provider", "Unknown")
+            provider_badge = "🔶 OpenRouter" if provider == "OpenRouter" else "🔷 DeepSeek"
+            
+            col1, col2, col3, col4 = st.columns([2, 0.8, 1.2, 0.8])
             
             with col1:
-                st.code(row["Model"], language=None)
+                st.code(model["id"], language=None)
             
             with col2:
-                st.write(row["Price (/1k tokens)"])
+                st.write(f"**{provider_badge}**")
             
             with col3:
-                if st.button("✅ Select", key=f"modal_select_{idx}_{searched_models[idx]['id']}"):
-                    st.session_state.selected_models[st.session_state.purpose] = searched_models[idx]["id"]
+                st.write(price_str)
+            
+            with col4:
+                if st.button("✅ Select", key=f"modal_select_{idx}_{model['id']}_{provider}"):
+                    # Store as "provider:model_id"
+                    st.session_state.selected_models[st.session_state.purpose] = f"{provider}:{model['id']}"
                     save_all_preferences()
                     st.session_state.show_model_modal = False
-                    st.success(f"✅ Selected: {searched_models[idx]['id']}")
+                    st.success(f"✅ Selected: {model['id']}")
                     st.rerun()
     else:
         st.warning("No models found for this search")
@@ -495,28 +568,45 @@ if not st.session_state.show_model_modal:
         
         # Chat input
         current_selected = st.session_state.selected_models.get(st.session_state.purpose)
-        if st.session_state.api_key and current_selected:
-            user_input = st.chat_input("Type your message...")
-            if user_input:
-                # Add user message
-                st.session_state.messages.append({"role": "user", "content": user_input})
-                
-                with st.chat_message("user"):
-                    st.write(user_input)
-                
-                # Get AI response
-                with st.chat_message("assistant"):
-                    with st.spinner("Thinking..."):
-                        response = chat_with_ai(
-                            st.session_state.api_key,
-                            current_selected,
-                            st.session_state.messages
-                        )
-                        st.write(response)
-                        st.session_state.messages.append({"role": "assistant", "content": response})
-                
-                st.rerun()
+        if current_selected:
+            # Parse provider and model_id
+            if ":" in current_selected:
+                provider, model_id = current_selected.split(":", 1)
+            else:
+                provider, model_id = "OpenRouter", current_selected
+            
+            # Check if API key exists for the provider
+            api_key = None
+            if provider == "DeepSeek" and st.session_state.api_key_deepseek:
+                api_key = st.session_state.api_key_deepseek
+            elif provider == "OpenRouter" and st.session_state.api_key_openrouter:
+                api_key = st.session_state.api_key_openrouter
+            
+            if api_key:
+                user_input = st.chat_input("Type your message...")
+                if user_input:
+                    # Add user message
+                    st.session_state.messages.append({"role": "user", "content": user_input})
+                    
+                    with st.chat_message("user"):
+                        st.write(user_input)
+                    
+                    # Get AI response
+                    with st.chat_message("assistant"):
+                        with st.spinner("Thinking..."):
+                            response = chat_with_ai(
+                                api_key,
+                                model_id,
+                                st.session_state.messages,
+                                provider
+                            )
+                            st.write(response)
+                            st.session_state.messages.append({"role": "assistant", "content": response})
+                    
+                    st.rerun()
+            else:
+                st.warning(f"Please add API key for {provider}")
         else:
-            st.warning("Please set API key and select a model first.")
+            st.warning("Please select a model first.")
     else:
         st.info("Create a new session or load an existing one from the sidebar.")
