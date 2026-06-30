@@ -187,25 +187,41 @@ with st.sidebar:
                              key=lambda x: float(x.get("pricing", {}).get("prompt", 999)))
                 st.session_state.selected_model = cheapest["id"]
                 st.success(f"Selected: {cheapest['id']}")
+                st.rerun()
             
-            # Manual selection
-            model_options = {m["id"]: f"{m['id']} - ${float(m.get('pricing', {}).get('prompt', 0)):.6f}/1k tokens" 
-                           for m in st.session_state.models[:20]}
-            
-            st.session_state.selected_model = st.selectbox(
-                "Choose model:",
-                options=list(model_options.keys()),
-                format_func=lambda x: model_options[x],
-                index=0 if not st.session_state.selected_model else list(model_options.keys()).index(st.session_state.selected_model)
-            )
-            
-            # Show selected model info
+            # Manual selection - only show if model is selected
             if st.session_state.selected_model:
+                model_options = {m["id"]: f"{m['id']} - ${float(m.get('pricing', {}).get('prompt', 0)):.6f}/1k tokens" 
+                               for m in st.session_state.models}
+                
+                # Find current index
+                current_index = 0
+                try:
+                    model_ids = list(model_options.keys())
+                    current_index = model_ids.index(st.session_state.selected_model)
+                except:
+                    current_index = 0
+                
+                selected_model = st.selectbox(
+                    "Choose model:",
+                    options=list(model_options.keys()),
+                    format_func=lambda x: model_options[x],
+                    index=current_index,
+                    key="model_selector"
+                )
+                
+                # Update if changed
+                if selected_model != st.session_state.selected_model:
+                    st.session_state.selected_model = selected_model
+                
+                # Show selected model info
                 selected = next((m for m in st.session_state.models if m["id"] == st.session_state.selected_model), None)
                 if selected:
                     st.info(f"📊 {selected['id']}\n\n"
                            f"Provider: {selected.get('owned_by', 'N/A')}\n\n"
                            f"Pricing: ${float(selected.get('pricing', {}).get('prompt', 0)):.6f} / ${float(selected.get('pricing', {}).get('completion', 0)):.6f}")
+            else:
+                st.warning("Click 'Auto-select cheapest' or select a model first")
         else:
             st.error("Could not load models. Check your API key.")
     
