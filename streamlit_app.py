@@ -25,6 +25,8 @@ if "models" not in st.session_state:
     st.session_state.models = []
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = None
+if "purpose" not in st.session_state:
+    st.session_state.purpose = "General"
 
 
 def get_available_models(api_key):
@@ -50,6 +52,33 @@ def get_available_models(api_key):
     except Exception as e:
         st.error(f"Error fetching models: {str(e)}")
     return []
+
+
+def filter_models_by_purpose(models, purpose):
+    """Filter models based on purpose"""
+    if purpose == "General":
+        return models
+    
+    elif purpose == "Academic/Research":
+        # Prioritize: Claude, GPT-4, DeepSeek (good reasoning)
+        keywords = ["claude", "gpt-4", "deepseek", "mistral"]
+        filtered = [m for m in models if any(k in m.get("id", "").lower() for k in keywords)]
+        return filtered if filtered else models
+    
+    elif purpose == "Programming":
+        # Prioritize: Code-specific models
+        keywords = ["deepseek", "claude", "gpt", "code"]
+        filtered = [m for m in models if any(k in m.get("id", "").lower() for k in keywords)]
+        return filtered if filtered else models
+    
+    return models
+
+
+def get_cheapest_model(models):
+    """Get cheapest model from list"""
+    if not models:
+        return None
+    return min(models, key=lambda x: float(x.get("pricing", {}).get("prompt", 999)))
 
 
 def save_session(session_name, messages, model):
@@ -181,47 +210,67 @@ with st.sidebar:
         if st.session_state.models:
             st.subheader("🤖 Model Selection")
             
-            # Auto-select cheapest
-            if st.button("Auto-select cheapest"):
-                cheapest = min(st.session_state.models, 
-                             key=lambda x: float(x.get("pricing", {}).get("prompt", 999)))
-                st.session_state.selected_model = cheapest["id"]
-                st.success(f"Selected: {cheapest['id']}")
-                st.rerun()
+            # Purpose selector
+            st.session_state.purpose = st.selectbox(
+                "Select Purpose:",
+                options=["General", "Academic/Research", "Programming"],
+                index=["General", "Academic/Research", "Programming"].index(st.session_state.purpose) if st.session_state.purpose in ["General", "Academic/Research", "Programming"] else 0,
+                key="purpose_selector"
+            )
             
-            # Manual selection - only show if model is selected
+            # Filter models by purpose
+            filtered_models = filter_models_by_purpose(st.session_state.models, st.session_state.purpose)
+            
+            # Auto-select cheapest based on purpose
+            if st.button("🎯 Auto-select Best for Purpose"):
+                cheapest = get_cheapest_model(filtered_models)
+                if cheapest:
+                    st.session_state.selected_model = cheapest["id"]
+                    st.success(f"✅ Selected: {cheapest['id']}")
+                else:
+                    st.error("No models found for this purpose")
+            
+            # Manual selection
             if st.session_state.selected_model:
                 model_options = {m["id"]: f"{m['id']} - ${float(m.get('pricing', {}).get('prompt', 0)):.6f}/1k tokens" 
-                               for m in st.session_state.models}
+                               for m in filtered_models}
                 
-                # Find current index
-                current_index = 0
-                try:
-                    model_ids = list(model_options.keys())
-                    current_index = model_ids.index(st.session_state.selected_model)
-                except:
+                if model_options:
+                    # Find current index
                     current_index = 0
-                
-                selected_model = st.selectbox(
-                    "Choose model:",
-                    options=list(model_options.keys()),
-                    format_func=lambda x: model_options[x],
-                    index=current_index,
-                    key="model_selector"
-                )
-                
-                # Update if changed
-                if selected_model != st.session_state.selected_model:
-                    st.session_state.selected_model = selected_model
-                
-                # Show selected model info
-                selected = next((m for m in st.session_state.models if m["id"] == st.session_state.selected_model), None)
-                if selected:
-                    st.info(f"📊 {selected['id']}\n\n"
-                           f"Provider: {selected.get('owned_by', 'N/A')}\n\n"
-                           f"Pricing: ${float(selected.get('pricing', {}).get('prompt', 0)):.6f} / ${float(selected.get('pricing', {}).get('completion', 0)):.6f}")
+                    try:
+                        model_ids = list(model_options.keys())
+                        if st.session_state.selected_model in model_ids:
+                            current_index = model_ids.index(st.session_state.selected_model)
+                        else:
+                            # If selected model not in filtered list, pick first from filtered
+                            st.session_state.selected_model = model_ids[0] if model_ids else None
+                            current_index = 0
+                    except:
+                        current_index = 0
+                    
+                    selected_model = st.selectbox(
+                        "Choose model:",
+                        options=list(model_options.keys()),
+                        format_func=lambda x: model_options[x],
+                        index=current_index,
+                        key="model_selector"
+                    )
+                    
+                    # Update if changed
+                    if selected_model != st.session_state.selected_model:
+                        st.session_state.selected_model = selected_model
+                    
+                    # Show selected model info
+                    selected = next((m for m in filtered_models if m["id"] == st.session_state.selected_model), None)
+                    if selected:
+                        st.info(f"📊 {selected['id']}\n\n"
+                               f"Provider: {selected.get('owned_by', 'N/A')}\n\n"
+                               f"Pricing: ${float(selected.get('pricing', {}).get('prompt', 0)):.6f} / ${float(selected.get('pricing', {}).get('completion', 0)):.6f}")
+                else:
+                    st.warning("No models available for this purpose")
             else:
-                st.warning("Click 'Auto-select cheapest' or select a model first")
+                st.info("👆 Click 'Auto-select Best for Purpose' to get started")
         else:
             st.error("Could not load models. Check your API key.")
     
